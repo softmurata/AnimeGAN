@@ -21,7 +21,7 @@ from subnetwork import VGG19, Generator, Discriminator
 
 class AnimeGAN(nn.Module):
 
-    def __init__(self, args, dataset, phase, device):
+    def __init__(self, args, phase, device):
 
 
         super().__init__()

@@ -10,7 +10,11 @@
 # import module
 import argparse
 import torch
+from torchvision import transforms
+from PIL import Image
+import matplotlib.pyplot as plt
 from model import AnimeGAN
+
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--gpu_number', type=int, default=0)
@@ -42,11 +46,23 @@ device = 'cuda:{}'.format(args.gpu_number) if torch.cuda.is_available() else "cp
 
 # build anime GAN model
 phase = 'train'
-animegan = AnimeGAN(args, phase)
+animegan = AnimeGAN(args, phase, device)
 
 if phase == 'train':
     animegan.train()
 
 else:
-    animegan.predict()
+    input_image_path = './dataset/test/005000.png'
+    real_image = Image.open(input_image_path).convert("RGB")
+    real_image = transforms.ToTensor(real_image)
+    real_image = real_image.view(1, real_image.shape[0], real_image.shape[1], real_image.shape[2])  # (1, c, h, w)
+    real_image = real_image.to(device)  # for cuda
+    generated_images = animegan.predict(real_image)
+
+    gene_image = (generated_images[0].cpu().numpy().transpose(1, 2, 0) + 1) / 2
+
+    save_dir = './out_images/'
+    os.makedirs(save_dir)
+    save_path = save_dir + input_image_path.split('/')[-1]
+    plt.imsave(save_path, gene_image) 
 
