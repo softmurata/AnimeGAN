@@ -88,9 +88,9 @@ class AnimeGAN(nn.Module):
 
         # create dataloader class
         real_image_dataset_path = args.dataset_dir + 'real/'
-        anime_image_dataset_path = args.dataset_dir + 'anime/'
-        anime_smooth_dataset_path = args.dataset_dir + 'anime_smooth/'
-        anime_gray_dataset_path = args.dataset_dir + 'anime_gray/'
+        anime_image_dataset_path = args.dataset_dir + '{}/anime/'.format(args.anime_name)
+        anime_smooth_dataset_path = args.dataset_dir + '{}/anime_smooth/'.format(args.anime_name)
+        anime_gray_dataset_path = args.dataset_dir + '{}/anime_gray/'.format(args.anime_name)
         self.real_image_dataloader = data_load(real_image_dataset_path, real_transform, args.batch_size)
         self.anime_image_dataloader = data_load(anime_image_dataset_path, anime_transform, args.batch_size)
         self.anime_smooth_dataloader = data_load(anime_smooth_dataset_path, anime_smooth_transform, args.batch_size)

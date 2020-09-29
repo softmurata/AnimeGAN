@@ -4,11 +4,11 @@ import numpy as np
 import os
 # smoothing and gray scale
 
-def apply_smoothing_and_grayscale(img_size):
+def apply_smoothing_and_grayscale(img_size, anime_name):
     # get anime images
-    anime_dataset_dir = './dataset/anime/'
-    anime_smooth_dir = './dataset/anime_smooth/'
-    anime_gray_dir = './dataset/anime_gray/'
+    anime_dataset_dir = './dataset/{}/anime/'.format(anime_name)
+    anime_smooth_dir = './dataset/{}/anime_smooth/'.format(anime_name)
+    anime_gray_dir = './dataset/{}/anime_gray/'.format(anime_name)
 
     os.makedirs(anime_smooth_dir, exist_ok=True)
     os.makedirs(anime_gray_dir, exist_ok=True)
@@ -56,7 +56,8 @@ def apply_smoothing_and_grayscale(img_size):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--img_size', type=int, default=256)
+    parser.add_argument('--anime_name', type=str, default='sentochihiro')
     args = parser.parse_args()
 
-    apply_smoothing_and_grayscale(args.img_size)
+    apply_smoothing_and_grayscale(args.img_size, args.anime_name)
 
