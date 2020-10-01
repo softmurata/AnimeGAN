@@ -1,4 +1,6 @@
+import torch
 import torch.nn as nn
+"""
 # VGG19
 class VGG19(nn.Module):
 
@@ -100,6 +102,54 @@ class VGG19(nn.Module):
                 x = fl(x)
 
 
+
+        return x
+"""
+
+
+class VGG19(nn.Module):
+    def __init__(self, init_weights=None, feature_mode=False, batch_norm=False, num_classes=1000, device='cpu'):
+        super().__init__()
+        self.cfg = [64, 64, 'M', 128, 128, 'M', 256, 256, 256, 256, 'M', 512, 512, 512, 512, 'M', 512, 512, 512, 512, 'M']
+        self.device = device
+        self.init_weights = init_weights
+        self.feature_mode = feature_mode
+        self.batch_norm = batch_norm
+        self.num_classes = num_classes
+        self.features = self.make_layers(self.cfg, batch_norm)
+        self.classifier = nn.Sequential(nn.Linear(512 * 7 * 7, 4096), nn.ReLU(True), nn.Dropout(), nn.Linear(4096, 4096), nn.ReLU(True), nn.Dropout(), nn.Linear(4096, num_classes))
+        if not init_weights == None:
+            self.load_state_dict(torch.load(init_weights))
+
+    def make_layers(self, cfg, batch_norm=False):
+        layers = []
+        in_channels = 3
+        for v in cfg:
+            if v == 'M':
+                layers += [nn.MaxPool2d(kernel_size=2, stride=2)]
+            else:
+                conv2d = nn.Conv2d(in_channels=in_channels, out_channels=v, kernel_size=3, stride=1, padding=1)
+                if batch_norm:
+                    layers += [conv2d, nn.BatchNorm2d(v), nn.ReLU(inplace=True)]
+                else:
+                    layers += [conv2d, nn.ReLU(inplace=True)]
+                in_channels = v
+
+        return nn.Sequential(*layers)
+
+    def forward(self, x):
+        x = x.to(self.device)
+        # print('vgg input shape:', x.shape)
+        if self.feature_mode:
+            module_list = list(self.features.modules())
+            for l in module_list[1:27]:
+                x = l(x)
+        
+        if not self.feature_mode:
+            x = x.view(x.size(0), -1)
+            x = self.classifier(x)
+
+
         return x
 
 
@@ -161,7 +211,7 @@ class InvertedResblock(nn.Module):
         self.depthwiseconv = DepthWiseConv(in_channels=512, out_channels=512, kernel_size=3, stride=1, padding=0)
         self.instance_norm1 = nn.InstanceNorm2d(num_features=512)
 
-        self.conv = nn.Conv2d(in_channels=512, out_channels=256, kernel_size=1, stride=1, padding=0)
+        self.conv = nn.Conv2d(in_channels=512, out_channels=256, kernel_size=1, stride=1, padding=1)
         self.instance_norm2 = nn.InstanceNorm2d(num_features=256)
 
     def forward(self, x):
@@ -169,6 +219,9 @@ class InvertedResblock(nn.Module):
         x = self.convblock(x)
         x = nn.LeakyReLU(negative_slope=0.2, inplace=True)(self.instance_norm1(self.depthwiseconv(x)))
         x = self.instance_norm2(self.conv(x))
+        # print()
+        # print('inversed Residual Block')
+        # print('input:', x1.shape, 'output:', x.shape)
         x = x + x1  # residual convolution
         return x
 
@@ -176,9 +229,9 @@ class DownConv(nn.Module):
 
     def __init__(self, in_channels, out_channels):
         super().__init__()
-        self.dsconv1 = DSConv(in_channels=in_channels, out_channels=out_channels, kernel_size=3, stride=2, padding=0)
-        self.resize = nn.Conv2d(in_channels=in_channels, out_channels=out_channels, kernel_size=3, stride=2, padding=0)
-        self.dsconv2 = DSConv(in_channels=out_channels, out_channels=out_channels, kernel_size=3, stride=1, padding=0)
+        self.dsconv1 = DSConv(in_channels=in_channels, out_channels=out_channels, kernel_size=3, stride=2, padding=1)
+        self.resize = nn.Conv2d(in_channels=in_channels, out_channels=out_channels, kernel_size=3, stride=2, padding=1)
+        self.dsconv2 = DSConv(in_channels=out_channels, out_channels=out_channels, kernel_size=3, stride=1, padding=1)
 
 
     def forward(self, x):
@@ -188,7 +241,9 @@ class DownConv(nn.Module):
         x1 = self.dsconv2(x1)
 
         x = self.dsconv1(x)
-
+        # print()
+        # print('DSConv')
+        # print('input:', x1.shape, 'output:', x.shape)
         x = x + x1
         return x
 
@@ -254,7 +309,7 @@ class Generator(nn.Module):
         self.convblock3 = ConvBlock(in_channels=128, out_channels=128, kernel_size=3, stride=1, padding=1)  # (128, 128, 128)
         self.dsconv1 = DSConv(in_channels=128, out_channels=128, kernel_size=3, stride=1, padding=1)  # (128, 128, 128)
         self.downconv2 = DownConv(in_channels=128, out_channels=256)  # (256, 64, 64)
-        self.convblock4 = ConvBlock(in_channels=256, out_channels=512, kernel_size=3, stride=1, padding=1)  # (256, 64, 64)
+        self.convblock4 = ConvBlock(in_channels=256, out_channels=256, kernel_size=3, stride=1, padding=1)  # (256, 64, 64)
 
         self.irb1 = InvertedResblock(in_channels=256, out_channels=256)  # (256, 64, 64)
         self.irb2 = InvertedResblock(in_channels=256, out_channels=256)  # (256, 64, 64)
@@ -269,7 +324,7 @@ class Generator(nn.Module):
         self.upconv1 = UpConv(in_channels=256, out_channels=128)  # (128, 128, 128)
         self.dsconv2 = DSConv(in_channels=128, out_channels=128, kernel_size=3, stride=1, padding=1)  # (128, 128, 128)
         self.convblock6 = ConvBlock(in_channels=128, out_channels=128, kernel_size=3, stride=1, padding=1)  # (128, 128, 128)
-        self.upconv2 = Upconv(in_channels=128, out_channels=64)  # (64, 256, 256)
+        self.upconv2 = UpConv(in_channels=128, out_channels=64)  # (64, 256, 256)
         self.convblock7 = ConvBlock(in_channels=64, out_channels=64, kernel_size=3, stride=1, padding=1)  # (64, 256, 256)
         self.convblock8 = ConvBlock(in_channels=64, out_channels=64, kernel_size=3, stride=1, padding=1)  # (64, 256, 256)
 
@@ -302,7 +357,7 @@ class Generator(nn.Module):
         x = self.convblock7(x)
         x = self.convblock8(x)
 
-        x = self.final_conv(x)
+        x = nn.Tanh()(self.final_conv(x))
 
         return x
 
@@ -358,18 +413,18 @@ class Discriminator(nn.Module):
         self.instance_norm5 = nn.InstanceNorm2d(num_features=256)
         self.conv6 = nn.Conv2d(in_channels=256, out_channels=256, kernel_size=3, stride=1, padding=1)  # (256, 64, 64)
         self.instance_norm6 = nn.InstanceNorm2d(num_features=256)
-        self.final_conv = nn.Conv2d(in_channels=256, out_channels=out_channels, kernel_size=3, stride=1, padding=1)  # (1, 64, 64)
+        self.conv7 = nn.Conv2d(in_channels=256, out_channels=out_channels, kernel_size=3, stride=1, padding=1)  # (1, 64, 64)
 
 
     def forward(self, x):
-
+        
         x = nn.LeakyReLU(negative_slope=0.2, inplace=True)(self.conv1(x))
         x = nn.LeakyReLU(negative_slope=0.2, inplace=True)(self.conv2(x))
         x = nn.LeakyReLU(negative_slope=0.2, inplace=True)(self.instance_norm3(self.conv3(x)))
         x = nn.LeakyReLU(negative_slope=0.2, inplace=True)(self.conv4(x))
         x = nn.LeakyReLU(negative_slope=0.2, inplace=True)(self.instance_norm5(self.conv5(x)))
         x = nn.LeakyReLU(negative_slope=0.2, inplace=True)(self.instance_norm6(self.conv6(x)))
-        x = self.final_conv(x)
-
+        x = self.conv7(x)
+        # x = nn.Sigmoid()(self.conv7(x))
 
         return x

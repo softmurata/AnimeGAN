@@ -1,3 +1,4 @@
+import torch
 from torchvision import datasets
 from torch.utils.data import Dataset
 

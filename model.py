@@ -1,11 +1,12 @@
 import numpy as np
+import matplotlib.pyplot as plt
 import torch
 import torch.nn as nn
 # build optimizer
 from torch.optim import Adam
 from dataset import data_load
 from torchvision import transforms
-
+from losses import *
 from subnetwork import VGG19, Generator, Discriminator
 
 # Network architecture => VGG19 will be used, so need to prepare for pretrained VGG19 model
@@ -29,7 +30,12 @@ class AnimeGAN(nn.Module):
         self.phase = phase
         self.device = device
         self.epoch = args.epoch
+        self.batch_size = args.batch_size
+        self.image_size = args.image_size
+        self.pretrained_epoch = args.pretrained_epoch
         self.save_freq = args.save_freq
+        self.training_rate = args.training_rate
+        self.out_image_dir = args.out_image_dir
 
         self.generator = Generator()
         self.discriminator = Discriminator()
@@ -50,7 +56,8 @@ class AnimeGAN(nn.Module):
         self.generator = self.generator.to(device)
         self.discriminator = self.discriminator.to(device)
 
-        self.vgg19 = VGG19() # pretrained VGG19
+        
+        self.vgg19 = VGG19(init_weights=args.vgg_pretrained_weights, feature_mode=True, device=device) # pretrained VGG19
         self.vgg19.to(device)
 
         self.loss_func_type = args.loss_func_type
@@ -58,9 +65,11 @@ class AnimeGAN(nn.Module):
         self.con_weight = args.con_weight
         self.style_weight = args.style_weight
         self.color_weight = args.color_weight
+        self.g_adv_weight = args.g_adv_weight
+        self.d_adv_weight = args.d_adv_weight
 
-        self.g_optimizer = Adam(self.generator.parameters(), lr=args.lr_g, beta1=args.beta1, beta2=args.beta2)
-        self.d_optimizer = Adam(self.discriminator.parameters(), lr=args.lr_d, beta1=args.beta1, beta2=args.beta2)
+        self.g_optimizer = Adam(self.generator.parameters(), lr=args.lr_g, betas=(args.beta1, args.beta2))
+        self.d_optimizer = Adam(self.discriminator.parameters(), lr=args.lr_d, betas=(args.beta1, args.beta2))
 
         # transform
         real_transform = transforms.Compose([
@@ -87,7 +96,7 @@ class AnimeGAN(nn.Module):
         ])
 
         # create dataloader class
-        real_image_dataset_path = args.dataset_dir + 'real/'
+        real_image_dataset_path = args.dataset_dir + 'real/{}/'.format(self.phase)
         anime_image_dataset_path = args.dataset_dir + '{}/anime/'.format(args.anime_name)
         anime_smooth_dataset_path = args.dataset_dir + '{}/anime_smooth/'.format(args.anime_name)
         anime_gray_dataset_path = args.dataset_dir + '{}/anime_gray/'.format(args.anime_name)
@@ -101,129 +110,147 @@ class AnimeGAN(nn.Module):
 
         return list(self.generator.parameters()) + list(self.discriminator.parameters())
 
-    def build_model(self, real_image, anime_image, anime_smooth, anime_gray):
-        # calculate loss
-
-        # generator inference
-        real_g = self.generator(real_image)  # G(x), x = real image
-
-        # disctiminator inference
-        real_d = self.discriminator(real_g)  # D(G(x))
-        anime_d = self.discriminator(anime_image)  # D(y)
-        anime_gray_d = self.discriminator(anime_gray)  # D(y_gray)
-        anime_smooth_d = self.discriminator(anime_smooth)  # D(y_smoo)
-
-        # add gradient penalty(Drastic GAN?)
-        GP = 0.0
-
-        # ToDo: implement con_sty_loss(), color_loss(), generator_loss(), discriminator_loss()
-        # calculate con style loss(c_loss => con loss, s_loss => style loss)
-        c_loss, s_loss = con_sty_loss(self.vgg19, real_image, anime_gray_d, real_g)
-        t_loss = self.con_weight * c_loss + self.style_weight * s_loss + self.color_weight * color_loss(real_image, real_g)
-
-        # generator loss and disctiminator loss
-        g_loss = generator_loss(self.loss_func_type, real_d) * self.g_adv_weight
-        d_loss = discriminator_loss(self.loss_func_type, anime_d, anime_gray_d, real_d, anime_smooth_d) * self.d_adv_weight
-
-        generator_loss = g_loss + t_loss
-        discriminator_loss = d_loss
-
-        return generator_loss, discriminator_loss
-
     def pretrained_generator(self):
         # set mode
         self.generator.train()
         self.vgg19.eval()
+        print('pretrained part')
         for e in range(self.pretrained_epoch):
             reconstruct_losses = []
-
+            batch_count = 0
             for (real_image, _), (anime_image, _), (anime_smooth, _), (anime_gray, _) in zip(self.real_image_dataloader, self.anime_image_dataloader, self.anime_smooth_dataloader, self.anime_gray_dataloader):
                 # for cuda
-                real_image = real_image.to(device)
-                anime_image = anime_image.to(device)
-                anime_smooth = anime_smooth.to(device)
-                anime_gray = anime_gray.to(device)
-
-                # train generator
-                generator_loss, _ = self.build_model(real_image, anime_image, anime_smooth, anime_gray)
-
+                real_image = real_image.to(self.device)
+                anime_image = anime_image.to(self.device)
+                anime_smooth = anime_smooth.to(self.device)
+                anime_gray = anime_gray.to(self.device)
+                
                 self.g_optimizer.zero_grad()
-                generator_loss.backward()
-                self.g_optimizer.step()
+                # generator inference
+                real_g = self.generator(real_image)  # G(x), x = real image
+                # disctiminator inference
+                real_d = self.discriminator(real_g)  # D(G(x))
+                anime_d = self.discriminator(anime_image)  # D(y)
+                anime_gray_d = self.discriminator(anime_gray)  # D(y_gray)
+                anime_smooth_d = self.discriminator(anime_smooth)  # D(y_smoo)
+                                
+                # generator loss
+                c_loss, s_loss = con_sty_loss(self.vgg19, real_image, anime_gray, real_g)
+                t_loss = self.con_weight * c_loss + self.style_weight * s_loss + self.color_weight * color_loss(real_image, real_g)
+                g_loss = gene_loss(self.loss_func_type, real_d, self.device) * self.g_adv_weight
 
-                reconstruct_losses.append(generator_loss.item())
+                
+                g_loss.backward()
+                self.g_optimizer.step()
+                if batch_count % 10 == 0:
+                    print('batch_count:{} generator loss:{:.5f}'.format(batch_count, g_loss.item()))
+
+                reconstruct_losses.append(g_loss.item())
+                batch_count += 1
 
             mean_recon_loss = np.mean(reconstruct_losses)
 
-            print('pretrained phase epoch: {} generator loss: {:. 5f}'.format(e, mean_recon_loss))
+            print('pretrained phase epoch: {} generator loss: {:.5f}'.format(e, mean_recon_loss))
 
 
 
 
     def train(self):
+        torch.autograd.set_detect_anomaly(True)
         # CartoonGAn, AnimeGAN
         # learning style
         # 1. pretrained generator training
         # 2. generator + discriminator training
 
-        # pretrain generator
-        self.pretrained_generator()
-
         # set mode
-        self.generator.train()
         self.discriminator.train()
         self.vgg19.eval()
-        
-        for e in range(self.epoch):
+        print('train part')
+        for e in range(self.epoch + self.pretrained_epoch):
+            
+            if e <= self.pretrained_epoch:
+                self.pretrained_generator()
+                
+            else:
+            
+                g_losses = []
+                d_losses = []
+                batch_count = 0
+                self.generator.train()
 
-            g_losses = []
-            d_losses = []
-
-            for (real_image, _), (anime_image, _), (anime_smooth, _), (anime_gray, _) in zip(self.real_image_dataloader, self.anime_image_dataloader, self.anime_smooth_dataloader, self.anime_gray_dataloader):
-                # for cuda
-                real_image = real_image.to(device)
-                anime_image = anime_image.to(device)
-                anime_smooth = anime_smooth.to(device)
-                anime_gray = anime_gray.to(device)
-
-                # calculate generator loss and discriminator loss
-                generator_loss, discriminator_loss = self.build_model(real_image, anime_image, anime_smooth, anime_gray)
-                # back propagation
-                if e % self.trainig_rate == 0:
+                for (real_image, _), (anime_image, _), (anime_smooth, _), (anime_gray, _) in zip(self.real_image_dataloader, self.anime_image_dataloader, self.anime_smooth_dataloader, self.anime_gray_dataloader):
+                    # for cuda
+                    real_image = real_image.to(self.device)
+                    anime_image = anime_image.to(self.device)
+                    anime_smooth = anime_smooth.to(self.device)
+                    anime_gray = anime_gray.to(self.device)
+                    
                     # update D
                     self.d_optimizer.zero_grad()
-                    discriminator_loss.backward()
+                    # generator inference
+                    real_g = self.generator(real_image)  # G(x), x = real image
+                    # disctiminator inference
+                    real_d = self.discriminator(real_g)  # D(G(x))
+                    anime_d = self.discriminator(anime_image)  # D(y)
+                    anime_gray_d = self.discriminator(anime_gray)  # D(y_gray)
+                    anime_smooth_d = self.discriminator(anime_smooth)  # D(y_smoo)
+
+                    
+                    # discriminator loss
+                    d_loss = disc_loss(self.loss_func_type, anime_d, anime_gray_d, real_d, anime_smooth_d, self.batch_size, self.image_size, self.device) * self.d_adv_weight
+                    
+                    # d_loss.backward(retain_graph=True)
+                    d_loss.backward()
                     self.d_optimizer.step()
+                    
+                    # update G
+                    self.g_optimizer.zero_grad()
+                    # generator loss
+                    real_g = self.generator(real_image)
+                    real_d = self.discriminator(real_g)
+                    c_loss, s_loss = con_sty_loss(self.vgg19, real_image, anime_gray, real_g)
+                    t_loss = self.con_weight * c_loss + self.style_weight * s_loss + self.color_weight * color_loss(real_image, real_g)
+                    g_loss = gene_loss(self.loss_func_type, real_d, self.device) * self.g_adv_weight
+                    
+                    
+                    g_loss.backward()
+                    self.g_optimizer.step()
+                    
+                    
+                    
+                    # update G
+                    if batch_count % 10 == 0:
+                        print('batch count:{} generator loss: {:.5f}  discriminator loss: {:.5f}'.format(batch_count, g_loss.item(), d_loss.item()))
+                    g_losses.append(g_loss.item())
+                    d_losses.append(d_loss.item())
+                    batch_count += 1
+
+                mean_g_loss = np.mean(g_losses)
+                mean_d_loss = np.mean(d_losses)
+
+                print('epoch: {}  generator loss: {:.5f}  discriminator loss: {:.5f}'.format(e, mean_g_loss, mean_d_loss))
+
+                if e % self.save_freq == 0:
+                    # generator
+                    generator_weight_path = 'checkpoint_generator_%05d.pth.tar' % e
+                    self.save(generator_weight_path, e, self.generator)
+
+                    # discriminator
+                    discriminator_weight_path = 'checkpoint_discriminator_%05d.pth.tar' % e
+                    self.save(discriminator_weight_path, e, self.discriminator)
+
+
                 
-                # update G
-                self.g_optimizer.zero_grad()
-                generator_loss.backward()
-                self.g_optimizer.step()
 
-                g_losses.append(generator_loss.item())
-                d_losses.append(discriminator_loss.item())
-
-            mean_g_loss = np.mean(g_losses)
-            mean_d_loss = np.mean(d_losses)
-
-            print('epoch: {}  generator loss: {:.5f}  discriminator loss: {:.5f}'.format(e, mean_g_loss, mean_d_loss))
-
-            if e % self.save_freq == 0:
-                # generator
-                generator_weight_path = 'checkpoint_generator_%05d.pth.tar' % e
-                self.save(generator_weight_path, e, self.generator)
-
-                # discriminator
-                discriminator_weight_path = 'checkpoint_discriminator_%05d.pth.tar' % e
-                self.save(discriminator_weight_path, e, self.discriminator)
-
-
-                
-
-    def predict(self, real_image):
+    def predict(self):
         self.generator.eval()
-
-        return self.generator(real_image)
+        for n, (x, _) in enumerate(self.real_image_dataloader):
+            x = x.to(self.device)
+            generator_recon = self.generator(x)
+            # if you want to get real and generated images in line, you should concatenate
+            result = torch.cat((x[0], generator_recon[0]), 2)
+            save_path = self.out_image_dir + str(n + 1) + '.png'
+            plt.imsave(save_path, (result.cpu().numpy().transpose(1, 2, 0) + 1) / 2)
 
 
     def save(self, weight_path, epoch, model):
